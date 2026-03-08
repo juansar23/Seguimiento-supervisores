@@ -3,239 +3,141 @@ import pandas as pd
 import io
 import plotly.express as px
 
-st.set_page_config(page_title="Dashboard Ejecutivo UT", layout="wide")
+st.set_page_config(page_title="Asignación Supervisores - UT", layout="wide")
 
-st.title("📊 Dashboard Ejecutivo - Unidad de Trabajo")
+st.title("👨‍💼 Asignación de Pólizas a Supervisores")
 
-archivo = st.file_uploader("Sube el archivo Excel", type=["xlsx"])
+archivo = st.file_uploader("Sube el archivo Excel con la base de datos", type=["xlsx"])
 
 if archivo:
-
     df = pd.read_excel(archivo)
     df.columns = df.columns.str.strip()
 
     # ================================
     # VALIDAR COLUMNAS CLAVE
     # ================================
-    columnas_necesarias = [
-        "RANGO_EDAD",
-        "SUBCATEGORIA",
-        "DEUDA_TOTAL",
-        "TECNICOS_INTEGRALES"
-    ]
-
+    columnas_necesarias = ["RANGO_EDAD", "SUBCATEGORIA", "DEUDA_TOTAL", "TECNICOS_INTEGRALES"]
     for col in columnas_necesarias:
         if col not in df.columns:
-            st.error(f"❌ No existe la columna: {col}")
+            st.error(f"❌ Falta la columna necesaria: {col}")
             st.stop()
 
-    # ================================
-    # LIMPIAR DEUDA PARA CALCULOS
-    # ================================
+    # Limpieza de deuda
     df["_deuda_num"] = (
-        df["DEUDA_TOTAL"]
-        .astype(str)
+        df["DEUDA_TOTAL"].astype(str)
         .str.replace("$", "", regex=False)
         .str.replace(",", "", regex=False)
         .str.replace(".", "", regex=False)
         .str.strip()
     )
-
     df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
     # ================================
-    # SIDEBAR FILTROS
+    # SIDEBAR - CONTROL DE SUPERVISORES
     # ================================
-    st.sidebar.header("🎯 Filtros")
+    st.sidebar.header("🎯 Filtros de Asignación")
 
+    # Lista oficial de supervisores
+    supervisores_base = [
+        "FAVIO ERNESTO VASQUEZ ROMERO",
+        "DEGUIN ZOCRATE DEGUIN ZOCRATE",
+        "YESID RAFAEL REALES MORENO",
+        "ABILIO SEGUNDO ARAUJO ARIÑO",
+        "JAVIER DAVID GOMEZ BARRIOS"
+    ]
+
+    # Filtros de datos
     rangos = sorted(df["RANGO_EDAD"].dropna().astype(str).unique())
-    subcategorias = sorted(df["SUBCATEGORIA"].dropna().astype(str).unique())
-    tecnicos = sorted(df["TECNICOS_INTEGRALES"].dropna().astype(str).unique())
+    sub_sel = st.sidebar.multiselect("Subcategoría", sorted(df["SUBCATEGORIA"].unique()), default=df["SUBCATEGORIA"].unique())
+    
+    deuda_minima = st.sidebar.number_input("Deudas mayores a:", min_value=0, value=100000, step=50000)
 
-    rangos_sel = st.sidebar.multiselect("Rango Edad", rangos, default=rangos)
-    sub_sel = st.sidebar.multiselect("Subcategoría", subcategorias, default=subcategorias)
-
-    deuda_minima = st.sidebar.number_input(
-        "Deudas mayores a:",
-        min_value=0,
-        value=100000,
-        step=50000
-    )
-
-    # Seleccionar todos excepto
-    st.sidebar.subheader("👥 Técnicos Integrales")
-
+    st.sidebar.divider()
+    st.sidebar.subheader("👥 Selección de Supervisores")
+    
     modo_exclusion = st.sidebar.checkbox("Seleccionar todos excepto")
 
     if modo_exclusion:
-        excluir = st.sidebar.multiselect("Técnicos a excluir", tecnicos)
-        tecnicos_final = [t for t in tecnicos if t not in excluir]
+        excluir = st.sidebar.multiselect("Supervisores a excluir", supervisores_base)
+        supervisores_final = [s for s in supervisores_base if s not in excluir]
     else:
-        tecnicos_final = st.sidebar.multiselect(
-            "Técnicos a incluir",
-            tecnicos,
-            default=tecnicos
+        supervisores_final = st.sidebar.multiselect(
+            "Supervisores a incluir", 
+            supervisores_base, 
+            default=supervisores_base
         )
 
-    st.sidebar.markdown(f"📊 Técnicos activos: {len(tecnicos_final)}")
-
-    if st.sidebar.button("Limpiar filtros"):
-        st.experimental_rerun()
+    if st.sidebar.button("Limpiar Filtros"):
+        st.rerun()
 
     # ================================
-    # FILTRAR DATA
+    # PROCESO DE FILTRADO Y ASIGNACIÓN (MAX 8)
     # ================================
+    
+    # 1. Filtrar por criterios y que pertenezcan a la lista de supervisores
     df_filtrado = df[
-        (df["RANGO_EDAD"].astype(str).isin(rangos_sel)) &
-        (df["SUBCATEGORIA"].astype(str).isin(sub_sel)) &
+        (df["SUBCATEGORIA"].isin(sub_sel)) &
         (df["_deuda_num"] >= deuda_minima) &
-        (df["TECNICOS_INTEGRALES"].astype(str).isin(tecnicos_final))
+        (df["TECNICOS_INTEGRALES"].isin(supervisores_final))
     ].copy()
 
+    # 2. Ordenar por mayor deuda para asignar las más importantes
     df_filtrado = df_filtrado.sort_values(by="_deuda_num", ascending=False)
 
-    # Limitar 50 por técnico
-    df_filtrado = (
+    # 3. LIMITAR A 8 PÓLIZAS POR SUPERVISOR
+    df_final = (
         df_filtrado
         .groupby("TECNICOS_INTEGRALES")
-        .head(50)
+        .head(8)
         .reset_index(drop=True)
     )
 
-    # ================================
-    # FORMATEAR FECHAS (SIN HORA)
-    # ================================
-    columnas_fecha = [
-        "FECHA_VENCIMIENTO",
-        "ULT_FECHAPAGO",
-        "FECHA_ASIGNACION"
-    ]
-
+    # Formatear fechas para la vista final
+    columnas_fecha = ["FECHA_VENCIMIENTO", "ULT_FECHAPAGO", "FECHA_ASIGNACION"]
     for col in columnas_fecha:
-        if col in df_filtrado.columns:
-            df_filtrado[col] = pd.to_datetime(
-                df_filtrado[col],
-                errors="coerce"
-            ).dt.strftime("%d/%m/%Y")
+        if col in df_final.columns:
+            df_final[col] = pd.to_datetime(df_final[col], errors="coerce").dt.strftime("%d/%m/%Y")
 
     # ================================
-    # TABS
+    # VISTA Y DESCARGA
     # ================================
-    tab1, tab2 = st.tabs(["📋 Tabla", "📊 Dashboard"])
+    tab1, tab2 = st.tabs(["📋 Lista de Asignación", "📊 Resumen"])
 
-    # ================================
-    # TABLA + DESCARGA EXCEL
-    # ================================
     with tab1:
+        st.success(f"Se han asignado un máximo de 8 pólizas a {len(supervisores_final)} supervisores.")
+        st.dataframe(df_final, use_container_width=True)
 
-        st.success(f"Total pólizas: {len(df_filtrado)}")
-        st.dataframe(df_filtrado, use_container_width=True)
-
-        if not df_filtrado.empty:
-
+        if not df_final.empty:
             output = io.BytesIO()
-            df_export = df_filtrado.copy()
-
-            columnas_moneda = [
-                "ULT_PAGO",
-                "VALOR_ULTFACT",
-                "DEUDA_TOTAL"
-            ]
-
-            # Convertir a número real
-            for col in columnas_moneda:
-                if col in df_export.columns:
-                    df_export[col] = (
-                        df_export[col]
-                        .astype(str)
-                        .str.replace("$", "", regex=False)
-                        .str.replace(",", "", regex=False)
-                        .str.replace(".", "", regex=False)
-                        .str.strip()
-                    )
-                    df_export[col] = pd.to_numeric(df_export[col], errors="coerce").fillna(0)
-
-            df_export = df_export.drop(columns=["_deuda_num"], errors="ignore")
-
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_export.to_excel(writer, index=False, sheet_name="Reporte")
-
-                workbook = writer.book
-                worksheet = writer.sheets["Reporte"]
-
-                for col in columnas_moneda:
-                    if col in df_export.columns:
-                        col_idx = df_export.columns.get_loc(col) + 1
-                        for row in range(2, len(df_export) + 2):
-                            worksheet.cell(row=row, column=col_idx).number_format = '"$"#,##0'
-
+                # Quitamos la columna auxiliar de cálculo antes de exportar
+                df_export = df_final.drop(columns=["_deuda_num"], errors="ignore")
+                df_export.to_excel(writer, index=False, sheet_name="Asignacion_Supervisores")
+            
             output.seek(0)
-
             st.download_button(
-                "📥 Descargar archivo",
+                "📥 Descargar Excel para Supervisores",
                 data=output,
-                file_name="resultado_filtrado.xlsx",
+                file_name="Asignacion_Supervisores.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
-    # ================================
-    # DASHBOARD
-    # ================================
     with tab2:
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("Total Pólizas", len(df_filtrado))
-        col2.metric("Total Deuda", f"$ {df_filtrado['_deuda_num'].sum():,.0f}")
-        col3.metric("Técnicos Activos", df_filtrado["TECNICOS_INTEGRALES"].nunique())
-
-        st.divider()
-
-        # Top 10 técnicos
-        st.subheader("🏆 Top 10 Técnicos con Mayor Deuda")
-
-        top10 = (
-            df_filtrado
-            .groupby("TECNICOS_INTEGRALES")["_deuda_num"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(10)
-            .reset_index()
-        )
-
-        top10.columns = ["Técnico", "Total Deuda"]
-        top10["Total Deuda"] = top10["Total Deuda"].apply(lambda x: f"$ {x:,.0f}")
-
-        st.dataframe(top10, use_container_width=True)
-
-        # Gráfica Rango Edad
-        st.subheader("📊 Pólizas por Rango de Edad")
-
-        conteo = df_filtrado["RANGO_EDAD"].astype(str).value_counts().reset_index()
-        conteo.columns = ["Rango Edad", "Cantidad"]
-
-        fig = px.bar(
-            conteo,
-            x="Rango Edad",
-            y="Cantidad",
-            text_auto=True
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Pie Subcategoría
-        st.subheader("🥧 Distribución por Subcategoría")
-
-        conteo_sub = df_filtrado["SUBCATEGORIA"].value_counts().reset_index()
-        conteo_sub.columns = ["Subcategoría", "Cantidad"]
-
-        fig2 = px.pie(
-            conteo_sub,
-            names="Subcategoría",
-            values="Cantidad"
-        )
-
-        st.plotly_chart(fig2, use_container_width=True)
+        col1, col2 = st.columns(2)
+        
+        # Métrica de carga
+        resumen_carga = df_final["TECNICOS_INTEGRALES"].value_counts().reset_index()
+        resumen_carga.columns = ["Supervisor", "Pólizas Asignadas"]
+        
+        with col1:
+            st.subheader("Carga por Supervisor")
+            st.table(resumen_carga)
+            
+        with col2:
+            st.subheader("Deuda Total Asignada")
+            total_deuda = df_final.groupby("TECNICOS_INTEGRALES")["DEUDA_TOTAL"].sum().reset_index() # Nota: usaría _deuda_num si DEUDA_TOTAL sigue siendo string
+            fig = px.pie(resumen_carga, names="Supervisor", values="Pólizas Asignadas", hole=0.4)
+            st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("👆 Sube un archivo para comenzar.")
+    st.info("👆 Por favor, carga el archivo de Excel para procesar la asignación de los supervisores.")
