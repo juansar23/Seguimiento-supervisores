@@ -14,7 +14,7 @@ if archivo:
     df.columns = df.columns.str.strip()
 
     # ================================
-    # VALIDAR COLUMNAS (Sin TECNICOS_INTEGRALES)
+    # VALIDAR COLUMNAS
     # ================================
     columnas_necesarias = ["RANGO_EDAD", "SUBCATEGORIA", "DEUDA_TOTAL"]
     for col in columnas_necesarias:
@@ -22,7 +22,7 @@ if archivo:
             st.error(f"❌ Falta la columna necesaria: {col}")
             st.stop()
 
-    # Limpieza de deuda
+    # Limpieza de deuda para ordenamiento
     df["_deuda_num"] = (
         df["DEUDA_TOTAL"].astype(str)
         .str.replace("$", "", regex=False)
@@ -45,45 +45,39 @@ if archivo:
         "JAVIER DAVID GOMEZ BARRIOS"
     ]
 
-    sub_sel = st.sidebar.multiselect("Subcategoría", sorted(df["SUBCATEGORIA"].unique()), default=df["SUBCATEGORIA"].unique())
+    sub_opciones = sorted(df["SUBCATEGORIA"].unique())
+    sub_sel = st.sidebar.multiselect("Subcategoría", sub_opciones, default=sub_opciones)
     deuda_minima = st.sidebar.number_input("Deudas mayores a:", min_value=0, value=0)
 
     st.sidebar.divider()
     st.sidebar.subheader("👥 Supervisores Activos")
-    
-    # Permitir elegir a quiénes se les va a asignar hoy
     sups_activos = st.sidebar.multiselect("Asignar a:", supervisores_base, default=supervisores_base)
 
     # ================================
-    # PROCESO DE ASIGNACIÓN DINÁMICA
+    # PROCESO DE ASIGNACIÓN
     # ================================
-    
-    # 1. Filtrar la base general por criterios
     df_pool = df[
         (df["SUBCATEGORIA"].isin(sub_sel)) &
         (df["_deuda_num"] >= deuda_minima)
     ].copy()
 
-    # 2. Ordenar por deuda (para dar las más importantes)
+    # Ordenar para entregar las de mayor deuda
     df_pool = df_pool.sort_values(by="_deuda_num", ascending=False)
 
-    # 3. CREAR LA COLUMNA DE SUPERVISORES Y ASIGNAR
-    # Calculamos cuántas pólizas necesitamos en total (8 por cada supervisor activo)
-    total_necesario = len(sups_activos) * 8
-    df_asignable = df_pool.head(total_necesario).copy()
+    if not df_pool.empty and sups_activos:
+        total_a_asignar = len(sups_activos) * 8
+        df_asignable = df_pool.head(total_a_asignar).copy()
 
-    if not df_asignable.empty and sups_activos:
-        # Repartimos los nombres de los supervisores en la nueva columna
-        lista_asignacion = []
+        # Generar lista de nombres repetidos 8 veces cada uno
+        lista_nombres = []
         for s in sups_activos:
-            lista_asignacion.extend([s] * 8)
+            lista_nombres.extend([s] * 8)
         
-        # Ajustamos al tamaño real por si hay menos de 40 pólizas disponibles
-        lista_asignacion = lista_asignacion[:len(df_asignable)]
-        
-        df_asignable["SUPERVISOR_ASIGNADO"] = lista_asignacion
+        # Recortar la lista si hay menos pólizas que el cupo total
+        lista_nombres = lista_nombres[:len(df_asignable)]
+        df_asignable["SUPERVISOR_ASIGNADO"] = lista_nombres
     else:
-        df_asignable["SUPERVISOR_ASIGNADO"] = None
+        df_asignable = pd.DataFrame()
 
     # ================================
     # VISTA Y DESCARGA
@@ -91,8 +85,8 @@ if archivo:
     tab1, tab2 = st.tabs(["📋 Lista de Asignación", "📊 Resumen"])
 
     with tab1:
-        if sups_activos:
-            st.success(f"Se han repartido las mejores pólizas entre {len(sups_activos)} supervisores.")
+        if not df_asignable.empty:
+            st.success(f"Se han repartido {len(df_asignable)} pólizas entre los supervisores seleccionados.")
             st.dataframe(df_asignable, use_container_width=True)
 
             output = io.BytesIO()
@@ -101,12 +95,24 @@ if archivo:
                 df_export.to_excel(writer, index=False, sheet_name="Asignacion")
             
             output.seek(0)
-            st.download_button("📥 Descargar Reporte", output, "Asignacion_Supervisores.xlsx")
+            st.download_button("📥 Descargar Reporte Excel", output, "Asignacion_Supervisores.xlsx")
         else:
-            st.warning("Selecciona al menos un supervisor en el panel de la izquierda.")
+            st.warning("No hay datos que coincidan con los filtros o no has seleccionado supervisores.")
 
     with tab2:
         if not df_asignable.empty:
             resumen = df_asignable["SUPERVISOR_ASIGNADO"].value_counts().reset_index()
             resumen.columns = ["Supervisor", "Cantidad"]
-            st.plotly_chart(px.bar(resumen, x="
+            
+            fig = px.bar(
+                resumen, 
+                x="Supervisor", 
+                y="Cantidad", 
+                color="Supervisor",
+                title="Pólizas Asignadas por Supervisor",
+                text_auto=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("👆 Sube el archivo Excel para procesar la asignación.")
