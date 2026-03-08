@@ -22,6 +22,7 @@ if archivo:
             st.error(f"❌ Falta la columna necesaria: {col}")
             st.stop()
 
+    # Limpieza de deuda para ordenamiento (Mayor a Menor)
     df["_deuda_num"] = (
         df["DEUDA_TOTAL"].astype(str)
         .str.replace("$", "", regex=False)
@@ -32,9 +33,10 @@ if archivo:
     df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
     # ================================
-    # SIDEBAR - CONFIGURACIÓN
+    # SIDEBAR - CONFIGURACIÓN (SIN FILTRO DE DEUDA)
     # ================================
     st.sidebar.header("🎯 Parámetros")
+    
     supervisores_base = [
         "FAVIO ERNESTO VASQUEZ ROMERO",
         "DEGUIN ZOCRATE DEGUIN ZOCRATE",
@@ -45,47 +47,52 @@ if archivo:
     
     sub_opciones = sorted(df["SUBCATEGORIA"].unique())
     sub_sel = st.sidebar.multiselect("Subcategoría", sub_opciones, default=sub_opciones)
-    deuda_minima = st.sidebar.number_input("Deudas mayores a:", min_value=0, value=0)
     
     st.sidebar.divider()
     sups_activos = st.sidebar.multiselect("Supervisores Activos", supervisores_base, default=supervisores_base)
 
+    if st.sidebar.button("Limpiar Filtros"):
+        st.rerun()
+
     # ================================
-    # PROCESO DE ASIGNACIÓN
+    # PROCESO DE ASIGNACIÓN AUTOMÁTICA
     # ================================
-    df_pool = df[
-        (df["SUBCATEGORIA"].isin(sub_sel)) & 
-        (df["_deuda_num"] >= deuda_minima)
-    ].copy().sort_values(by="_deuda_num", ascending=False)
+    # Filtramos por subcategoría y ordenamos de mayor a menor deuda
+    df_pool = df[df["SUBCATEGORIA"].isin(sub_sel)].copy().sort_values(by="_deuda_num", ascending=False)
 
     if not df_pool.empty and sups_activos:
         total_a_asignar = len(sups_activos) * 8
         df_final = df_pool.head(total_a_asignar).copy()
         
+        # Generar lista de asignación (8 por cada supervisor activo)
         lista_nombres = []
         for s in sups_activos:
             lista_nombres.extend([s] * 8)
         
+        # Asignamos los nombres a la nueva columna
         df_final["SUPERVISOR_ASIGNADO"] = lista_nombres[:len(df_final)]
     else:
         df_final = pd.DataFrame()
 
     # ================================
-    # PESTAÑAS (ESTILO DASHBOARD)
+    # PESTAÑAS (DISEÑO SOLICITADO)
     # ================================
     tab1, tab2 = st.tabs(["📋 Lista de Asignación", "📊 Resumen Visual"])
 
     with tab1:
         if not df_final.empty:
-            st.success(f"Se han asignado un máximo de 8 pólizas a {len(sups_activos)} supervisores.")
+            st.success(f"Asignación completada: {len(df_final)} pólizas distribuidas.")
             st.dataframe(df_final, use_container_width=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_final.drop(columns=["_deuda_num"]).to_excel(writer, index=False, sheet_name="Asignacion")
+                df_export = df_final.drop(columns=["_deuda_num"], errors="ignore")
+                df_export.to_excel(writer, index=False, sheet_name="Asignacion_Supervisores")
             
             output.seek(0)
-            st.download_button("📥 Descargar Reporte", output, "Asignacion_Supervisores.xlsx")
+            st.download_button("📥 Descargar Reporte Excel", output, "Asignacion_Supervisores.xlsx")
+        else:
+            st.warning("No hay datos disponibles. Verifica las subcategorías o los supervisores seleccionados.")
 
     with tab2:
         if not df_final.empty:
@@ -97,26 +104,25 @@ if archivo:
 
             st.divider()
 
-            # --- TOP 10 (En este caso supervisores con más deuda asignada) ---
-            st.subheader("🏆 Top Supervisores por Deuda Asignada")
+            # --- TABLA RESUMEN POR SUPERVISOR ---
+            st.subheader("🏆 Deuda Asignada por Supervisor")
             top_sup = df_final.groupby("SUPERVISOR_ASIGNADO")["_deuda_num"].sum().sort_values(ascending=False).reset_index()
             top_sup.columns = ["Supervisor", "Total Deuda"]
             top_sup["Total Deuda"] = top_sup["Total Deuda"].apply(lambda x: f"$ {x:,.0f}")
             st.table(top_sup)
 
-            # --- GRÁFICO DE BARRAS (Rango Edad) ---
+            # --- GRÁFICO BARRAS RANGO EDAD ---
             st.subheader("📊 Pólizas por Rango de Edad")
             conteo_edad = df_final["RANGO_EDAD"].value_counts().reset_index()
             conteo_edad.columns = ["Rango Edad", "Cantidad"]
             fig_bar = px.bar(conteo_edad, x="Rango Edad", y="Cantidad", text_auto=True, color_discrete_sequence=['#87CEEB'])
-            fig_bar.update_layout(showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
+            fig_bar.update_layout(plot_bgcolor='rgba(0,0,0,0)', yaxis_title="Cantidad de Pólizas")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # --- GRÁFICO DE PASTEL (Subcategoría) ---
+            # --- GRÁFICO PASTEL SUBCATEGORÍA ---
             st.subheader("🥧 Distribución por Subcategoría")
             conteo_sub = df_final["SUBCATEGORIA"].value_counts().reset_index()
             conteo_sub.columns = ["Subcategoría", "Cantidad"]
-            fig_pie = px.pie(conteo_sub, names="Subcategoría", values="Cantidad", hole=0.3)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        else:
-            st.warning("No hay datos para mostrar en el dashboard.")
+            st.plotly_chart(px.pie(conteo_sub, names="Subcategoría", values="Cantidad", hole=0.3), use_container_width=True)
+else:
+    st.info("👆 Por favor, carga el archivo Excel para iniciar el Dashboard.")
